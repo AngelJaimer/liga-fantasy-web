@@ -1,6 +1,3 @@
-import { readFile } from "node:fs/promises";
-import path from "node:path";
-
 export type JugadorMercado = {
   id: string;
   nombre: string;
@@ -20,6 +17,10 @@ export type JugadorMercado = {
   valorHace1d: number | null;
   valorHace7d: number | null;
   valorHace30d: number | null;
+  pujaMaximaRentable: number | null;
+  sinRentabilidad: boolean;
+  valorMax30d: number | null;
+  valorMin30d: number | null;
 };
 
 export type MercadoIndex = {
@@ -29,20 +30,20 @@ export type MercadoIndex = {
   jugadores: JugadorMercado[];
 };
 
-let cached: MercadoIndex | null = null;
+const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 
 /**
- * Carga data/mercado.json (generado por scripts/scrape-mercado.mjs,
- * refrescado a diario por el workflow de GitHub Actions). Se cachea en
- * memoria del proceso — en dev/servidor esto vive mientras el proceso esté
- * vivo, que es lo que queremos para no releer el fichero en cada request.
+ * Carga public/mercado.json (generado por scripts/scrape-mercado.mjs,
+ * refrescado a diario por el workflow de GitHub Actions que reconstruye y
+ * republica el sitio). El sitio es estático, así que esto se pide por
+ * fetch() al vuelo desde el navegador — no hay servidor detrás.
  */
 export async function loadMercadoIndex(): Promise<MercadoIndex> {
-  if (cached) return cached;
-  const file = path.join(process.cwd(), "data", "mercado.json");
-  const raw = await readFile(file, "utf-8");
-  cached = JSON.parse(raw) as MercadoIndex;
-  return cached;
+  const res = await fetch(`${BASE_PATH}/mercado.json`, { cache: "no-store" });
+  if (!res.ok) {
+    throw new Error(`No se pudo cargar el índice de mercado (HTTP ${res.status})`);
+  }
+  return (await res.json()) as MercadoIndex;
 }
 
 export function normalizeName(str: string): string {

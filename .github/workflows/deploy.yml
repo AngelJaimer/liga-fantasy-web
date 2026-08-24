@@ -1,0 +1,69 @@
+name: Scrapear mercado y publicar en GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # 03:00 UTC ≈ poco después de que FútbolFantasy.com recalcule el
+    # mercado a las 00:17 hora española (CET/CEST según época del año).
+    - cron: "0 3 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      # Se hace ANTES del build para que el índice quede horneado en el
+      # export estático, y también se comitea a main para que quede en el
+      # repo (útil para `npm run dev` en local sin tener que esperar el
+      # scrape completo).
+      - name: Scrapear mercado (jugadores + puja máxima rentable)
+        run: node scripts/scrape-mercado.mjs
+
+      - name: Comitear mercado.json si cambió
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add public/mercado.json
+          git diff --cached --quiet && echo "Sin cambios en el mercado" || git commit -m "chore: actualizar mercado $(date -u +%F)"
+          git push
+
+      - name: Build estático
+        run: npm run build
+        env:
+          NEXT_PUBLIC_GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID }}
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./out
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

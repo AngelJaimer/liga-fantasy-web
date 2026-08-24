@@ -1,6 +1,7 @@
-import { fetchLigaPremios, type JugadorPremios } from "@/lib/sheet";
+"use client";
 
-export const dynamic = "force-dynamic";
+import { useEffect, useState } from "react";
+import { fetchLigaPremios, type JugadorPremios } from "@/lib/sheet";
 
 function eur(n: number) {
   return n.toLocaleString("es-ES", {
@@ -33,16 +34,17 @@ function DetalleJugador({ j }: { j: JugadorPremios }) {
   );
 }
 
-export default async function PremiosPage() {
-  let jugadores: JugadorPremios[] = [];
-  let error: string | null = null;
+export default function PremiosPage() {
+  const [jugadores, setJugadores] = useState<JugadorPremios[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  try {
-    const data = await fetchLigaPremios();
-    jugadores = data.jugadores;
-  } catch (e) {
-    error = e instanceof Error ? e.message : "Error desconocido leyendo el Sheet";
-  }
+  useEffect(() => {
+    fetchLigaPremios()
+      .then((data) => setJugadores(data.jugadores))
+      .catch((e) =>
+        setError(e instanceof Error ? e.message : "Error desconocido leyendo el Sheet")
+      );
+  }, []);
 
   return (
     <div className="space-y-6">
@@ -59,14 +61,16 @@ export default async function PremiosPage() {
         <div className="rounded-lg border border-red-900 bg-red-950/40 p-4 text-red-300 text-sm">
           No se pudo leer el Google Sheet: {error}
           <br />
-          Comprueba que la variable de entorno{" "}
-          <code className="text-red-200">GOOGLE_SHEET_ID</code> está puesta y
-          que el Sheet sigue compartido como &ldquo;cualquiera con el
-          enlace&rdquo;.
+          Comprueba que el Sheet sigue compartido como &ldquo;cualquiera con
+          el enlace&rdquo;.
         </div>
       )}
 
-      {!error && (
+      {!error && jugadores === null && (
+        <p className="text-neutral-500 text-sm">Cargando premios…</p>
+      )}
+
+      {!error && jugadores !== null && (
         <div className="overflow-x-auto rounded-lg border border-neutral-800">
           <table className="w-full text-sm">
             <thead className="bg-neutral-900 text-neutral-400 text-left">

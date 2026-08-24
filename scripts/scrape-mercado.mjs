@@ -1,13 +1,24 @@
 #!/usr/bin/env node
 /**
  * Scrapea la página pública de mercado de FutbolFantasy.com (LaLiga Fantasy
- * Oficial) y vuelca un índice de jugadores en data/mercado.json.
+ * Oficial) y vuelca un índice de jugadores en public/mercado.json.
  *
  * Fuente: https://www.futbolfantasy.com/analytics/laliga-fantasy/mercado
  * No requiere login. La tabla completa (~670 jugadores) viene ya en el HTML
  * como atributos data-* de cada <tr>, ocultos por CSS hasta que el JS del
  * cliente los reordena — por eso una petición HTTP normal basta, no hace
  * falta un navegador headless.
+ *
+ * Por cada jugador se pide además su ficha de detalle (puja máxima
+ * rentable, máximo/mínimo de 30 días) y se hornea en el mismo JSON. Esto
+ * se hace aquí, en el scraper que corre en Node vía GitHub Actions, y NO
+ * en el navegador del usuario: se comprobó que futbolfantasy.com bloquea
+ * (probablemente por protección anti-bot / WAF) las peticiones fetch()
+ * hechas desde JS de un navegador a estas páginas —devuelven
+ * "Failed to fetch"—, mientras que una petición Node/curl normal, sin
+ * huella de navegador, funciona sin problema. Como el sitio es estático
+ * (GitHub Pages, sin servidor propio), la única forma fiable de tener este
+ * dato es precalcularlo aquí y servirlo ya listo.
  *
  * Uso: node scripts/scrape-mercado.mjs
  */
@@ -17,7 +28,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const OUT_PATH = join(__dirname, "..", "data", "mercado.json");
+// En public/ para poder pedirlo por fetch() en tiempo de ejecución desde el
+// navegador (el sitio es estático — GitHub Pages no ejecuta código servidor).
+const OUT_PATH = join(__dirname, "..", "public", "mercado.json");
 
 const MERCADO_URL = "https://www.futbolfantasy.com/analytics/laliga-fantasy/mercado";
 const UA =
@@ -66,6 +79,79 @@ function normalize(str) {
     .trim();
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function fetchDetalle(id) {
+  const url = `https://www.futbolfantasy.com/analytics/laliga-fantasy/mercado/detalle/${id}`;
+  const res = await fetch(url, {
+    headers: { "User-Agent": UA, "Accept-Language": "es-ES,es;q=0.9" },
+  });
+  if (res.status === 429) {
+    const retryAfter = Number(res.headers.get("retry-after"));
+    const err = new Error("HTTP 429");
+    err.retryAfterMs = Number.isFinite(retryAfter) ? retryAfter * 1000 : null;
+    throw err;
+  }
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const html = await res.text();
+
+  const pujaMatch = html.match(/parsePujaIdeal\((\d+)\s*\)/);
+  const pujaMaximaRentable = pujaMatch ? Number(pujaMatch[1]) : null;
+  const sinRentabilidad = /Sin rentabilidad/.test(html) && pujaMaximaRentable === null;
+
+  let valorMax30d = null;
+  let valorMin30d = null;
+  const histRe = /player_chartjs_30\.push\(\{date:\s*"([^"]+)",\s*value:\s*(\d+)\}\)/g;
+  for (const m of html.matchAll(histRe)) {
+    const v = Number(m[2]);
+    if (valorMax30d === null || v > valorMax30d) valorMax30d = v;
+    if (valorMin30d === null || v < valorMin30d) valorMin30d = v;
+  }
+
+  return { pujaMaximaRentable, sinRentabilidad, valorMax30d, valorMin30d };
+}
+
+// El sitio rate-limita agresivamente (medido: con 12 en paralelo, el 95%
+// de las peticiones acababan en HTTP 429). Vamos secuenciales, con una
+// pausa entre peticiones y reintentos con espera creciente si aun así nos
+// tropezamos con un 429 — 671 peticiones así tardan varios minutos, pero es
+// un cron nocturno: no hay prisa, y es lo respetuoso con su servidor.
+const PAUSA_ENTRE_PETICIONES_MS = 400;
+const REINTENTOS = 4;
+
+async function fetchDetalleConReintentos(id) {
+  for (let intento = 0; intento <= REINTENTOS; intento++) {
+    try {
+      return await fetchDetalle(id);
+    } catch (err) {
+      if (intento === REINTENTOS) throw err;
+      const espera = err.retryAfterMs ?? 1000 * 2 ** intento; // 1s, 2s, 4s, 8s
+      await sleep(espera);
+    }
+  }
+}
+
+async function fetchTodosLosDetalles(ids, onProgress) {
+  const resultados = new Map();
+  for (let idx = 0; idx < ids.length; idx++) {
+    const id = ids[idx];
+    try {
+      resultados.set(id, await fetchDetalleConReintentos(id));
+    } catch (err) {
+      console.warn(`  aviso: detalle de ${id} falló (${err.message}), se deja sin esos datos`);
+      resultados.set(id, {
+        pujaMaximaRentable: null,
+        sinRentabilidad: false,
+        valorMax30d: null,
+        valorMin30d: null,
+      });
+    }
+    onProgress?.(idx + 1, ids.length);
+    await sleep(PAUSA_ENTRE_PETICIONES_MS);
+  }
+  return resultados;
+}
+
 async function main() {
   console.log("Descargando", MERCADO_URL);
   const res = await fetch(MERCADO_URL, {
@@ -108,6 +194,24 @@ async function main() {
       valorHace30d: num(r["valor30"]),
     };
   });
+
+  console.log(`Pidiendo la ficha de detalle de ${players.length} jugadores (puja máxima rentable, máx/mín 30 días)…`);
+  let hecho = 0;
+  const detalles = await fetchTodosLosDetalles(
+    players.map((p) => p.id),
+    (n, total) => {
+      hecho = n;
+      if (n % 100 === 0 || n === total) console.log(`  ${n}/${total}`);
+    }
+  );
+  for (const p of players) {
+    const d = detalles.get(p.id);
+    p.pujaMaximaRentable = d?.pujaMaximaRentable ?? null;
+    p.sinRentabilidad = d?.sinRentabilidad ?? false;
+    p.valorMax30d = d?.valorMax30d ?? null;
+    p.valorMin30d = d?.valorMin30d ?? null;
+  }
+  console.log(`Detalle completado para ${hecho} jugadores.`);
 
   const payload = {
     fuente: MERCADO_URL,

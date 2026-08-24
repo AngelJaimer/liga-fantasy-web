@@ -9,11 +9,15 @@ import Papa from "papaparse";
  * OAuth para un fichero visible por enlace.
  */
 
-const SHEET_ID = process.env.GOOGLE_SHEET_ID;
+// Se llama desde el navegador (sitio estático), así que tiene que ser una
+// env var pública (NEXT_PUBLIC_*) para que Next la incluya en el bundle.
+// No es un dato sensible: el propio Sheet ya está compartido como
+// "cualquiera con el enlace", así que su ID no protege nada por sí solo.
+const SHEET_ID = process.env.NEXT_PUBLIC_GOOGLE_SHEET_ID;
 const GVIZ_BASE = () => {
   if (!SHEET_ID) {
     throw new Error(
-      "Falta la variable de entorno GOOGLE_SHEET_ID (el ID del Google Sheet, en la URL entre /d/ y /edit)."
+      "Falta la variable de entorno NEXT_PUBLIC_GOOGLE_SHEET_ID (el ID del Google Sheet, en la URL entre /d/ y /edit)."
     );
   }
   return `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq`;

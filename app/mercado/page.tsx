@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import { loadMercadoIndex } from "@/lib/mercadoIndex";
+import { matchOcrTextoContraIndice } from "@/lib/matchOcr";
 import type { JugadorMercado } from "@/lib/mercadoIndex";
 
 type Coincidencia = {
@@ -65,21 +67,29 @@ export default function MercadoPage() {
 
       setEstado({ fase: "buscando" });
 
-      const res = await fetch("/api/mercado/match", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ texto: textoCompleto }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? `Error del servidor (HTTP ${res.status})`);
-      }
-      const data = await res.json();
-      setEstado({
-        fase: "listo",
-        coincidencias: data.coincidencias,
-        sinCoincidencia: data.sinCoincidencia,
-      });
+      const { jugadores } = await loadMercadoIndex();
+      const { coincidencias, sinCoincidencia } = matchOcrTextoContraIndice(
+        textoCompleto,
+        jugadores
+      );
+
+      // La puja máxima rentable y el máx/mín de 30 días ya vienen horneados
+      // en el índice (public/mercado.json) — el scraper diario los pide en
+      // Node al montar el índice. No se piden en vivo desde el navegador:
+      // futbolfantasy.com bloquea el fetch() hecho desde JS de navegador a
+      // esas páginas (protección anti-bot), aunque curl/Node sí funcionan.
+      const enriquecidas: Coincidencia[] = coincidencias.map((c) => ({
+        linea: c.linea,
+        precioDetectado: c.precioDetectado,
+        confianza: c.confianza,
+        jugador: c.jugador,
+        pujaMaximaRentable: c.jugador.pujaMaximaRentable,
+        sinRentabilidad: c.jugador.sinRentabilidad,
+        valorMax30d: c.jugador.valorMax30d,
+        valorMin30d: c.jugador.valorMin30d,
+      }));
+
+      setEstado({ fase: "listo", coincidencias: enriquecidas, sinCoincidencia });
     } catch (e) {
       setEstado({
         fase: "error",
