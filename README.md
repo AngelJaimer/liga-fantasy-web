@@ -1,36 +1,57 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Liga Fantasy 2026/27
 
-## Getting Started
+Web para la liga fantasy del grupo: premios acumulados (leídos en vivo del
+Google Sheet de la liga) y una herramienta de mercado (sube capturas de tu
+mercado en LaLiga Fantasy, se leen por OCR y se enriquecen con datos
+públicos de mercado).
 
-First, run the development server:
+## Cómo funciona
+
+- **`/`** — lee la pestaña "Liga" del Google Sheet vía su export CSV público
+  (`gviz`), sin necesidad de credenciales — el Sheet solo tiene que estar
+  compartido como "cualquiera con el enlace: lector" (ya lo está).
+- **`/mercado`** — subes una o varias capturas de pantalla, se leen con OCR
+  en el propio navegador ([tesseract.js](https://github.com/naptha/tesseract.js)),
+  y el texto detectado se empareja (fuzzy match) contra un índice de ~670
+  jugadores de LaLiga Fantasy Oficial. Ese índice se scrapea a diario de
+  [FútbolFantasy.com](https://www.futbolfantasy.com/analytics/laliga-fantasy/mercado)
+  (dato público, sin login) vía un workflow de GitHub Actions
+  (`.github/workflows/update-mercado.yml`) que comitea `data/mercado.json`.
+  La "puja máxima rentable" y el histórico de 30 días se piden puntualmente
+  por jugador cuando hace falta (no en el scrape diario, para no golpear la
+  web con 670 peticiones cada día).
+
+## Por qué esta fuente y no la API oficial de LaLiga Fantasy
+
+La API oficial (`api-fantasy.llt-services.com`) existe y funciona, pero el
+login de esta cuenta es solo por Google/app — sacar un token requiere
+interceptar el tráfico del móvil (ver `../fantasy-scout/scout.py`, un
+experimento anterior) y ese token expira, así que no es viable para una web
+que se quede funcionando sola. FútbolFantasy.com expone los mismos valores
+de mercado en una página pública sin login; `robots.txt` no la bloquea. Es
+scraping de un tercero sin API documentada — puede romperse si cambian el
+HTML — pero para un proyecto pequeño entre amigos, con una consulta diaria,
+es lo más razonable.
+
+## Desarrollo local
 
 ```bash
+npm install
+cp .env.local.example .env.local   # y rellena GOOGLE_SHEET_ID
+node scripts/scrape-mercado.mjs    # genera data/mercado.json la primera vez
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Variables de entorno
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+| Variable          | Qué es                                                          |
+| ----------------- | ---------------------------------------------------------------- |
+| `GOOGLE_SHEET_ID` | ID del Google Sheet de la liga (la parte de la URL entre `/d/` y `/edit`) |
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Pendiente / ideas para más adelante
 
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Persistir las capturas subidas y su resultado (hoy todo vive solo en la
+  sesión del navegador).
+- Guardar histórico propio de "mi mercado" por jornada.
+- Si algún día compensa, migrar el índice de mercado a la API oficial de
+  LaLiga Fantasy usando un token renovado periódicamente.
