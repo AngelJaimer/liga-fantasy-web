@@ -34,6 +34,39 @@ function DetalleJugador({ j }: { j: JugadorPremios }) {
   );
 }
 
+function TarjetaPremios({ j, puesto }: { j: JugadorPremios; puesto: number }) {
+  return (
+    <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4 space-y-2">
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-baseline gap-2 min-w-0">
+          <span className="text-neutral-600 text-sm shrink-0">{puesto}</span>
+          <span className="font-medium truncate">{j.jugador}</span>
+        </div>
+        <span
+          className={`text-xs shrink-0 ${j.pagado ? "text-emerald-400" : "text-neutral-500"}`}
+        >
+          {j.pagado ? "Pagado" : "Sin pagar"}
+        </span>
+      </div>
+      <div className="text-sm">
+        <DetalleJugador j={j} />
+      </div>
+      <div className="flex items-center justify-between pt-1 border-t border-neutral-800/80">
+        <div>
+          <div className="text-[10px] uppercase text-neutral-500">Total ganado</div>
+          <div className="font-semibold">{eur(j.totalGanado)}</div>
+        </div>
+        <div className="text-right">
+          <div className="text-[10px] uppercase text-neutral-500">Neto</div>
+          <div className={`font-semibold ${j.neto < 0 ? "text-red-400" : "text-emerald-400"}`}>
+            {eur(j.neto)}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function PremiosPage() {
   const [jugadores, setJugadores] = useState<JugadorPremios[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -71,49 +104,10 @@ export default function PremiosPage() {
       )}
 
       {!error && jugadores !== null && (
-        <div className="overflow-x-auto rounded-lg border border-neutral-800">
-          <table className="w-full text-sm">
-            <thead className="bg-neutral-900 text-neutral-400 text-left">
-              <tr>
-                <th className="px-4 py-3 font-medium">#</th>
-                <th className="px-4 py-3 font-medium">Jugador</th>
-                <th className="px-4 py-3 font-medium">Detalle de premios</th>
-                <th className="px-4 py-3 font-medium text-right">Pagado</th>
-                <th className="px-4 py-3 font-medium text-right">
-                  Total ganado
-                </th>
-                <th className="px-4 py-3 font-medium text-right">Neto</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-neutral-800">
-              {jugadores.map((j, i) => (
-                <tr key={j.jugador} className="hover:bg-neutral-900/40">
-                  <td className="px-4 py-3 text-neutral-500">{i + 1}</td>
-                  <td className="px-4 py-3 font-medium">{j.jugador}</td>
-                  <td className="px-4 py-3">
-                    <DetalleJugador j={j} />
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    {j.pagado ? (
-                      <span className="text-emerald-400">Sí</span>
-                    ) : (
-                      <span className="text-neutral-500">No</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-right font-semibold">
-                    {eur(j.totalGanado)}
-                  </td>
-                  <td
-                    className={`px-4 py-3 text-right font-semibold ${
-                      j.neto < 0 ? "text-red-400" : "text-emerald-400"
-                    }`}
-                  >
-                    {eur(j.neto)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="space-y-3">
+          {jugadores.map((j, i) => (
+            <TarjetaPremios key={j.jugador} j={j} puesto={i + 1} />
+          ))}
         </div>
       )}
     </div>
