@@ -95,9 +95,20 @@ async function fetchDetalle(id) {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const html = await res.text();
 
+  // Cuando no hay puja rentable que recomendar, la web igualmente emite
+  // "parsePujaIdeal(0)" en el HTML — el 0 es un valor de relleno que el JS
+  // del cliente (que no vemos, se resuelve en su bundle) convierte en el
+  // texto "Sin rentabilidad". Ojo: ese texto "Sin rentabilidad" TAMBIÉN
+  // aparece siempre en el párrafo explicativo genérico de cada página
+  // (describe la función, no el estado de este jugador en concreto), así
+  // que buscarlo literalmente daba falsos positivos hasta en jugadores con
+  // una puja real. El único indicador fiable que tenemos es que el propio
+  // parsePujaIdeal reciba un 0 — si trae un número mayor, es una puja de
+  // verdad.
   const pujaMatch = html.match(/parsePujaIdeal\((\d+)\s*\)/);
-  const pujaMaximaRentable = pujaMatch ? Number(pujaMatch[1]) : null;
-  const sinRentabilidad = /Sin rentabilidad/.test(html) && pujaMaximaRentable === null;
+  const pujaBruta = pujaMatch ? Number(pujaMatch[1]) : null;
+  const sinRentabilidad = pujaBruta === 0;
+  const pujaMaximaRentable = pujaBruta && pujaBruta > 0 ? pujaBruta : null;
 
   let valorMax30d = null;
   let valorMin30d = null;

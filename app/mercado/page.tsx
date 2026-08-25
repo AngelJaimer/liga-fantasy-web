@@ -1,11 +1,10 @@
 "use client";
 
-import { useState } from "react";
-import { loadMercadoIndex } from "@/lib/mercadoIndex";
-import { matchOcrTextoContraIndice, type CoincidenciaOcr } from "@/lib/matchOcr";
+import { useCallback, useEffect, useState } from "react";
+import { loadMercadoIndex, type JugadorMercado } from "@/lib/mercadoIndex";
+import { matchOcrTextoContraIndice } from "@/lib/matchOcr";
+import { marcarVistosEnMercado, leerMercadoDeHoy } from "@/lib/mercadoDia";
 import SubidaCapturas from "@/components/SubidaCapturas";
-
-type Resultado = { coincidencias: CoincidenciaOcr[]; sinCoincidencia: string[] } | null;
 
 function eur(n: number | null) {
   if (n === null) return "—";
@@ -22,35 +21,35 @@ function pct(n: number | null) {
   return `${signo}${n.toFixed(1)}%`;
 }
 
-function TarjetaJugador({ c }: { c: CoincidenciaOcr }) {
-  const subiendo = (c.jugador.diferenciaPct1d ?? 0) >= 0;
+function TarjetaJugador({ jugador }: { jugador: JugadorMercado }) {
+  const subiendo = (jugador.diferenciaPct1d ?? 0) >= 0;
   return (
     <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4 space-y-2">
       <div className="flex items-start justify-between gap-2">
         <div>
-          <div className="font-medium capitalize">{c.jugador.nombre}</div>
+          <div className="font-medium capitalize">{jugador.nombre}</div>
           <div className="text-xs text-neutral-500">
-            {c.jugador.equipo ?? "—"} · {c.jugador.posicion ?? "—"}
+            {jugador.equipo ?? "—"} · {jugador.posicion ?? "—"}
           </div>
         </div>
-        {c.jugador.sinRentabilidad ? (
+        {jugador.sinRentabilidad ? (
           <span className="text-xs text-red-400 whitespace-nowrap">Sin rentabilidad</span>
         ) : (
           <div className="text-right shrink-0">
             <div className="text-[10px] uppercase text-neutral-500">Puja rentable</div>
-            <div className="text-sm font-semibold">{eur(c.jugador.pujaMaximaRentable)}</div>
+            <div className="text-sm font-semibold">{eur(jugador.pujaMaximaRentable)}</div>
           </div>
         )}
       </div>
       <div className="grid grid-cols-2 gap-2 text-sm">
         <div>
           <div className="text-[10px] uppercase text-neutral-500">Valor actual</div>
-          <div>{eur(c.jugador.valor)}</div>
+          <div>{eur(jugador.valor)}</div>
         </div>
         <div>
           <div className="text-[10px] uppercase text-neutral-500">Últ. mercado</div>
           <div className={subiendo ? "text-emerald-400" : "text-red-400"}>
-            {pct(c.jugador.diferenciaPct1d)}
+            {pct(jugador.diferenciaPct1d)}
           </div>
         </div>
       </div>
@@ -59,53 +58,88 @@ function TarjetaJugador({ c }: { c: CoincidenciaOcr }) {
 }
 
 export default function MercadoPage() {
-  const [resultado, setResultado] = useState<Resultado>(null);
+  const [mercadoHoy, setMercadoHoy] = useState<JugadorMercado[] | null>(null);
+  const [cargandoHoy, setCargandoHoy] = useState(true);
+  const [sinCoincidencia, setSinCoincidencia] = useState<string[] | null>(null);
+
+  const cargarMercadoDeHoy = useCallback(async () => {
+    setCargandoHoy(true);
+    try {
+      const [{ jugadores }, idsVistos] = await Promise.all([
+        loadMercadoIndex(),
+        leerMercadoDeHoy(),
+      ]);
+      const porId = new Map(jugadores.map((j) => [j.id, j]));
+      const encontrados = idsVistos
+        .map((id) => porId.get(id))
+        .filter((j): j is JugadorMercado => !!j)
+        .sort((a, b) => a.nombre.localeCompare(b.nombre));
+      setMercadoHoy(encontrados);
+    } finally {
+      setCargandoHoy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    // Carga inicial de datos externos (Firestore) al montar — el propio
+    // cargarMercadoDeHoy gestiona sus setState de forma segura.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    cargarMercadoDeHoy();
+  }, [cargarMercadoDeHoy]);
 
   const analizar = async (textoCompleto: string) => {
     const { jugadores } = await loadMercadoIndex();
-    setResultado(matchOcrTextoContraIndice(textoCompleto, jugadores));
+    const { coincidencias, sinCoincidencia } = matchOcrTextoContraIndice(
+      textoCompleto,
+      jugadores
+    );
+    setSinCoincidencia(sinCoincidencia);
+
+    if (coincidencias.length > 0) {
+      await marcarVistosEnMercado(coincidencias.map((c) => c.jugador.id));
+    }
+    await cargarMercadoDeHoy();
   };
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold">Mercado</h1>
+        <h1 className="text-2xl font-bold">Mercado de hoy</h1>
         <p className="text-neutral-400 text-sm mt-1">
-          Sube una o varias capturas del mercado. Leemos los nombres con
-          OCR, los buscamos en el índice (actualizado a diario) y te
-          decimos su subida en el último mercado y su puja máxima rentable.
+          Sube capturas del mercado y se suman aquí para todo el grupo —
+          nunca se guarda la captura en sí, solo qué jugadores había. Se
+          reinicia solo con cada mercado nuevo (~14:06 hora de Nueva York).
         </p>
       </div>
 
       <SubidaCapturas onResultado={analizar} />
 
-      {resultado && (
-        <div className="space-y-4">
-          <div className="space-y-3">
-            {resultado.coincidencias.map((c) => (
-              <TarjetaJugador key={c.jugador.id} c={c} />
+      {sinCoincidencia && sinCoincidencia.length > 0 && (
+        <div className="rounded-lg border border-amber-900 bg-amber-950/30 p-4 text-amber-200 text-sm">
+          <p className="font-medium mb-1">
+            Líneas que no se pudieron emparejar con ningún jugador:
+          </p>
+          <ul className="list-disc list-inside space-y-0.5 text-amber-300/80">
+            {sinCoincidencia.map((l, i) => (
+              <li key={i} className="break-words">{l}</li>
             ))}
-            {resultado.coincidencias.length === 0 && (
-              <p className="text-sm text-neutral-500">
-                No se reconoció a ningún jugador en el texto leído.
-              </p>
-            )}
-          </div>
-
-          {resultado.sinCoincidencia.length > 0 && (
-            <div className="rounded-lg border border-amber-900 bg-amber-950/30 p-4 text-amber-200 text-sm">
-              <p className="font-medium mb-1">
-                Líneas que no se pudieron emparejar con ningún jugador:
-              </p>
-              <ul className="list-disc list-inside space-y-0.5 text-amber-300/80">
-                {resultado.sinCoincidencia.map((l, i) => (
-                  <li key={i} className="break-words">{l}</li>
-                ))}
-              </ul>
-            </div>
-          )}
+          </ul>
         </div>
       )}
+
+      <div className="space-y-3">
+        {cargandoHoy && (
+          <p className="text-sm text-neutral-500">Cargando el mercado de hoy…</p>
+        )}
+        {!cargandoHoy && mercadoHoy?.length === 0 && (
+          <p className="text-sm text-neutral-500">
+            Nadie ha subido capturas del mercado todavía en este ciclo — sé el primero.
+          </p>
+        )}
+        {mercadoHoy?.map((j) => (
+          <TarjetaJugador key={j.id} jugador={j} />
+        ))}
+      </div>
     </div>
   );
 }

@@ -52,21 +52,25 @@ function crearFuse(jugadores: JugadorMercado[]) {
   });
 }
 
-// Cuántos jugadores del índice comparten cada apellido (el último token del
+// Qué jugadores del índice comparten cada apellido (el último token del
 // nombre). Se usa para decidir si con solo el apellido basta: la app suele
 // mostrar solo el apellido en las tarjetas ("Catena", no "Alejandro
 // Catena"), así que exigir siempre el nombre completo perdería la mayoría
 // de coincidencias reales. Si el apellido es único en toda la liga, no
-// hace falta el nombre de pila para estar seguros de quién es.
-function contarApellidos(jugadores: JugadorMercado[]): Map<string, number> {
-  const conteo = new Map<string, number>();
+// hace falta el nombre de pila para estar seguros de quién es; si lo
+// comparten varios, todavía se puede desambiguar por la inicial (ver
+// `mejorCoincidenciaPorTokens` — la app a veces muestra "A. Herrero").
+function agruparPorApellido(jugadores: JugadorMercado[]): Map<string, JugadorMercado[]> {
+  const grupos = new Map<string, JugadorMercado[]>();
   for (const j of jugadores) {
     const tokens = tokensDe(j.nombreNormalizado);
     if (tokens.length === 0) continue;
     const apellido = tokens[tokens.length - 1];
-    conteo.set(apellido, (conteo.get(apellido) ?? 0) + 1);
+    const grupo = grupos.get(apellido);
+    if (grupo) grupo.push(j);
+    else grupos.set(apellido, [j]);
   }
-  return conteo;
+  return grupos;
 }
 
 // Distancia de edición acotada a 1 — solo nos interesa saber si dos
@@ -103,17 +107,21 @@ function contieneTokenAproximado(palabrasLinea: string[], token: string): boolea
  * en capturas reales de la app, donde nombre y puntos comparten fila
  * visual.
  *
- * Hace falta encontrar TODOS los tokens del nombre, salvo que el apellido
- * por sí solo sea único en el índice (ver `contarApellidos`), en cuyo caso
- * ese basta. Es preferible no encontrar a nadie que encontrar a quien no
- * es — por eso, ante empate, gana el nombre con más tokens (más
- * específico, menos probable que sea casualidad).
+ * Hace falta encontrar TODOS los tokens del nombre, salvo dos atajos para
+ * cuando la app solo muestra el apellido (pasa a menudo):
+ *  - si ese apellido es único en todo el índice, basta con él.
+ *  - si lo comparten varios jugadores pero la línea trae una inicial
+ *    ("A. Herrero") que coincide con el nombre de pila de solo uno de
+ *    ellos, también queda desambiguado.
+ * Es preferible no encontrar a nadie que encontrar a quien no es — por
+ * eso, ante empate, gana el nombre con más tokens (más específico, menos
+ * probable que sea casualidad).
  */
 function mejorCoincidenciaPorTokens(
   linea: string,
   jugadores: JugadorMercado[],
   idsYaUsados: Set<string>,
-  apellidosUnicos: Map<string, number>
+  gruposApellido: Map<string, JugadorMercado[]>
 ): { jugador: JugadorMercado; confianza: number } | null {
   const lineaNorm = normalizeName(linea);
   if (lineaNorm.length < TOKEN_MIN_LEN) return null;
@@ -121,6 +129,12 @@ function mejorCoincidenciaPorTokens(
     .split(/[^a-z0-9]+/)
     .filter((p) => p.length >= TOKEN_MIN_LEN && !PALABRAS_INTERFAZ.has(p));
   if (palabrasLinea.length === 0) return null;
+
+  // Iniciales tipo "A." que aparezcan en la línea (sin normalizar: hace
+  // falta la mayúscula), normalizadas para comparar con el nombre de pila.
+  const inicialesLinea = new Set(
+    [...linea.matchAll(/\b([A-ZÁÉÍÓÚÑ])\.\s*/g)].map((m) => normalizeName(m[1]))
+  );
 
   let mejor: { jugador: JugadorMercado; tokens: number; confianza: number } | null = null;
   for (const j of jugadores) {
@@ -130,18 +144,25 @@ function mejorCoincidenciaPorTokens(
 
     const todos = tokens.every((t) => contieneTokenAproximado(palabrasLinea, t));
     const apellido = tokens[tokens.length - 1];
-    // Aquí SIN tolerancia difusa a propósito: es la vía "débil" (un solo
-    // token en vez del nombre completo), así que se exige coincidencia
-    // exacta para compensar.
-    const soloApellidoVale =
-      !todos &&
-      tokens.length > 1 &&
-      apellidosUnicos.get(apellido) === 1 &&
-      palabrasLinea.includes(apellido);
+    const apellidoEnLinea = tokens.length > 1 && contieneTokenAproximado(palabrasLinea, apellido);
 
-    if (!todos && !soloApellidoVale) continue;
+    let confianza: number | null = todos ? 1 : null;
+    if (!todos && apellidoEnLinea) {
+      const grupo = gruposApellido.get(apellido) ?? [];
+      if (grupo.length === 1) {
+        confianza = 0.85; // apellido único en todo el índice
+      } else if (grupo.length > 1 && inicialesLinea.has(tokens[0][0])) {
+        // Apellido compartido, pero la inicial de pila que trae la línea
+        // solo cuadra con uno de ellos.
+        const otrosConEsaInicial = grupo.filter((g) => {
+          const t = tokensDe(g.nombreNormalizado);
+          return t.length > 0 && t[0][0] === tokens[0][0];
+        });
+        if (otrosConEsaInicial.length === 1) confianza = 0.8;
+      }
+    }
+    if (confianza === null) continue;
 
-    const confianza = todos ? 1 : 0.85;
     if (!mejor || tokens.length > mejor.tokens || (tokens.length === mejor.tokens && confianza > mejor.confianza)) {
       mejor = { jugador: j, tokens: tokens.length, confianza };
     }
@@ -177,7 +198,7 @@ export function matchOcrTextoContraIndice(
   jugadores: JugadorMercado[]
 ): ResultadoMatch {
   const fuse = crearFuse(jugadores);
-  const apellidosUnicos = contarApellidos(jugadores);
+  const gruposApellido = agruparPorApellido(jugadores);
   const idsYaUsados = new Set<string>();
   const coincidencias: CoincidenciaOcr[] = [];
   const sinCoincidencia: string[] = [];
@@ -189,7 +210,7 @@ export function matchOcrTextoContraIndice(
 
   for (const linea of lineas) {
     const match =
-      mejorCoincidenciaPorTokens(linea, jugadores, idsYaUsados, apellidosUnicos) ??
+      mejorCoincidenciaPorTokens(linea, jugadores, idsYaUsados, gruposApellido) ??
       mejorCoincidenciaFuse(fuse, linea, idsYaUsados);
     if (!match) {
       sinCoincidencia.push(linea);
